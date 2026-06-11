@@ -53,3 +53,12 @@ func (c *Cache) Delete(key string) error {
 	c.data.Delete(key)
 	return nil
 }
+
+func (c *Cache) Size() int {
+	count := 0
+	c.data.Range(func(key, value any) bool {
+		count++
+		return true
+	})
+	return count
+}

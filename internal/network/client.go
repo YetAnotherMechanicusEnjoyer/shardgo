@@ -5,22 +5,26 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 type Client struct {
-	addr string
+	addr    string
+	timeout time.Duration
 }
 
 func NewClient(addr string) *Client {
-	return &Client{addr: addr}
+	return &Client{addr: addr, timeout: 5 * time.Second}
 }
 
 func (c *Client) SendRequest(rawCmd string) (string, error) {
-	conn, err := net.Dial("tcp", c.addr)
+	conn, err := net.DialTimeout("tcp", c.addr, c.timeout)
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close()
+
+	_ = conn.SetDeadline(time.Now().Add(c.timeout))
 
 	parts := strings.Fields(rawCmd)
 	if len(parts) == 0 {

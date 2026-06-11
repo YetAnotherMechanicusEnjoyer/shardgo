@@ -3,23 +3,32 @@ package network
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/YetAnotherMechanicusEnjoyer/shardgo/internal/cache"
+	"github.com/YetAnotherMechanicusEnjoyer/shardgo/internal/cluster"
 )
 
 type Server struct {
-	addr  string
-	cache *cache.Cache
+	addr     string
+	cache    *cache.Cache
+	cluster  *cluster.Manager
+	isMaster bool
+	nodeAddr string
 }
 
-func NewServer(addr string, cache *cache.Cache) *Server {
+func NewServer(addr string, cache *cache.Cache, cluster *cluster.Manager, isMaster bool) *Server {
 	return &Server{
-		addr:  addr,
-		cache: cache,
+		addr:     addr,
+		cache:    cache,
+		cluster:  cluster,
+		isMaster: isMaster,
+		nodeAddr: addr,
 	}
 }
 
@@ -62,6 +71,22 @@ func (s *Server) handleConnection(conn net.Conn) {
 }
 
 func (s *Server) processRequest(req *Request) (string, error) {
+	if req.Command == "ADD_NODE" && len(req.Args) >= 2 {
+		return s.handleClusterCommand(req)
+	}
+
+	key := ""
+	if len(req.Args) >= 2 {
+		key = req.Args[1]
+	}
+
+	if key != "" && s.cluster != nil {
+		node, ok := s.cluster.GetNodeForKey(key)
+		if !ok || node != s.nodeAddr {
+			return s.forwardRequest(req, node)
+		}
+	}
+
 	switch req.Command {
 	case "SET":
 		if len(req.Args) < 3 {
@@ -101,7 +126,38 @@ func (s *Server) processRequest(req *Request) (string, error) {
 		}
 		return FormatResponse("OK"), nil
 
+	case "STATS":
+		size := s.cache.Size()
+		return fmt.Sprintf(":%d\r\n", size), nil
+
 	default:
 		return "", errors.New("unknown command")
 	}
+}
+
+func (s *Server) forwardRequest(req *Request, targetNode string) (string, error) {
+	if targetNode == "" {
+		return "", errors.New("no node responsible for key")
+	}
+
+	client := NewClient(targetNode)
+
+	var rawCmd strings.Builder
+
+	rawCmd.WriteString(req.Command)
+	for _, arg := range req.Args[1:] {
+		rawCmd.WriteString(" ")
+		rawCmd.WriteString(arg)
+	}
+
+	return client.SendRequest(rawCmd.String())
+}
+
+func (s *Server) handleClusterCommand(req *Request) (string, error) {
+	if req.Command == "ADD_NODE" && len(req.Args) >= 2 {
+		node := req.Args[1]
+		s.cluster.AddNode(node)
+		return FormatResponse("OK"), nil
+	}
+	return "", errors.New("unknown cluster command")
 }
